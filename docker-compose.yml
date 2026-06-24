@@ -1,0 +1,20 @@
+# Supervisor kendi basina, bagimsiz bir compose dosyasi olarak calisir.
+# Diger 3 proje (youtube-rag, sql-agent, browser-agent) kendi ayri
+# docker-compose dosyalariyla, kendi klasorlerinde ayri ayri ayaga kaldiriliyor.
+#
+# Onkosul: digerleri su portlarda host'a expose edilmis olmali
+#   youtube-rag    -> host:8001
+#   sql-agent      -> host:8002
+#   browser-agent  -> host:8003
+
+services:
+  supervisor:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    # Linux + Docker Desktop olmayan ortamlarda host.docker.internal calismaz,
+    # bu satiri acman gerekir:
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"

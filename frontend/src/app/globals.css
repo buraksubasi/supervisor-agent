@@ -1,0 +1,46 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body {
+  height: 100%;
+  background-color: #0f1117;
+  color: #e2e8f0;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #1a1d27;
+}
+::-webkit-scrollbar-thumb {
+  background: #2e3347;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #404766;
+}
+
+/* Typing cursor animation */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+.typing-cursor::after {
+  content: "▋";
+  animation: blink 0.8s step-end infinite;
+  color: #6366f1;
+  margin-left: 2px;
+}
+
+/* Tool card pulse animation */
+@keyframes pulse-border {
+  0%, 100% { border-color: #6366f1; }
+  50% { border-color: #818cf8; }
+}
+.tool-active {
+  animation: pulse-border 1.2s ease-in-out infinite;
+}

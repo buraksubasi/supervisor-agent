@@ -1,0 +1,71 @@
+# =============================================================================
+# Python / Backend
+# =============================================================================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env.bak
+
+# Environment & secrets
+.env
+*.local
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# mypy / pyright
+.mypy_cache/
+.pyright/
+
+# =============================================================================
+# Node / Frontend
+# =============================================================================
+node_modules/
+.npm
+
+# Next.js
+frontend/.next/
+frontend/out/
+
+# Build output
+frontend/dist/
+frontend/build/
+
+# Environment
+frontend/.env.local
+frontend/.env.*.local
+
+# Cache
+frontend/.eslintcache
+frontend/.swc/
+frontend/tsconfig.tsbuildinfo
+
+# =============================================================================
+# Editors & OS
+# =============================================================================
+.vscode/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =============================================================================
+# Docker
+# =============================================================================
+*.log
+docker-compose.override.yml
