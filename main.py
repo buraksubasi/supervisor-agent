@@ -15,7 +15,7 @@ ve sonuçları sentezleyip kullanıcıya tek bir cevap olarak döner.
 
 import json
 import logging
-
+from graph.builder import supervisor_graph
 import google.generativeai as genai
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -68,95 +68,25 @@ SYSTEM_INSTRUCTION = (
 
 @app.post("/ask", response_model=AskResponse)
 async def ask(req: AskRequest):
-    model = genai.GenerativeModel(
-        model_name=GEMINI_MODEL,
-        tools=TOOL_DEFINITIONS,
-        system_instruction=SYSTEM_INSTRUCTION,
+    result = await supervisor_graph.ainvoke({
+        "question": req.question,
+        "selected_tool": "unknown",
+        "tool_args": {},
+        "agent_response": None,
+        "is_sufficient": None,
+        "attempts": 0,
+        "trace": [],
+        "final_answer": None,
+    })
+    
+    return AskResponse(
+        answer=result["final_answer"] or "",
+        trace=result["trace"],
     )
-    chat = model.start_chat()
-
-    logger.info("Gelen soru: %r", req.question)
-
-    trace: list[dict] = []
-    response = chat.send_message(req.question)
-
-    # Tool-calling loop: Gemini bir fonksiyon çağırmak isterse, biz onu çalıştırıp
-    # sonucu tekrar modele besliyoruz; model "artık yeterli bilgim var" deyip
-    # düz metin cevap verene kadar bu döngü devam ediyor. MAX_AGENT_STEPS sonsuz
-    # döngüye karşı bir güvenlik sınırı.
-    for step in range(MAX_AGENT_STEPS):
-        function_calls = [
-            part.function_call
-            for part in response.candidates[0].content.parts
-            if part.function_call
-        ]
-
-        if not function_calls:
-            # Model artık tool çağırmıyor -> elimizdeki metin nihai cevap
-            final_text = response.text
-            logger.info("Adım %d: Tool çağrısı yok, nihai cevap döndürülüyor.", step + 1)
-            return AskResponse(answer=final_text, trace=trace)
-
-        logger.info(
-            "Adım %d: Gemini %d tool çağırıyor -> %s",
-            step + 1,
-            len(function_calls),
-            [c.name for c in function_calls],
-        )
-
-        # Gemini aynı turda birden fazla fonksiyon çağırabilir; hepsini çalıştırıp
-        # sonuçları tek seferde geri besliyoruz.
-        function_response_parts = []
-        for call in function_calls:
-            tool_name = call.name
-            tool_args = dict(call.args)
-
-            logger.info("  -> Tool: %-25s | Args: %s", tool_name, tool_args)
-
-            handler = TOOL_DISPATCH.get(tool_name)
-            if handler is None:
-                result = f"[bilinmeyen tool: {tool_name}]"
-            else:
-                result = await handler(**tool_args)
-
-            logger.info("  <- Tool: %-25s | Sonuç (ilk 120 kar): %.120s", tool_name, result)
-
-            trace.append({"tool": tool_name, "args": tool_args, "result": result})
-
-            function_response_parts.append(
-                genai.protos.Part(
-                    function_response=genai.protos.FunctionResponse(
-                        name=tool_name,
-                        response={"result": result},
-                    )
-                )
-            )
-
-        response = chat.send_message(
-            genai.protos.Content(parts=function_response_parts)
-        )
-
-    # MAX_AGENT_STEPS'e ulaşıldı ama model hâlâ tool çağırmaya devam ediyor olabilir.
-    # Sonsuz döngüye girmemek için elimizdeki son metni (varsa) dönüyoruz.
-    fallback_text = getattr(response, "text", None) or (
-        "Adım sınırına ulaşıldı, işlem tamamlanamadı."
-    )
-    return AskResponse(answer=fallback_text, trace=trace)
 
 
 @app.post("/ask/stream")
 async def ask_stream(req: AskRequest):
-    """SSE endpoint: agent adımlarını gerçek zamanlı olarak akıtır.
-
-    Event tipleri:
-      thinking   - Gemini düşünüyor / ara adım geçiş mesajı
-      tool_call  - Hangi tool hangi argümanlarla çağrılıyor
-      tool_result- Tool sonucunun kısa önizlemesi
-      answer     - Nihai Türkçe cevap metni
-      done       - Tüm trace bilgisiyle stream sonu
-      error      - Beklenmedik hata
-    """
-
     def emit(data: dict) -> str:
         return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -164,80 +94,80 @@ async def ask_stream(req: AskRequest):
         try:
             yield emit({"type": "thinking", "message": "Sorunuz analiz ediliyor..."})
 
-            model = genai.GenerativeModel(
-                model_name=GEMINI_MODEL,
-                tools=TOOL_DEFINITIONS,
-                system_instruction=SYSTEM_INSTRUCTION,
-            )
-            chat = model.start_chat()
+            initial_state = {
+                "question": req.question,
+                "selected_tool": "unknown",
+                "tool_args": {},
+                "agent_response": None,
+                "is_sufficient": None,
+                "attempts": 0,
+                "trace": [],
+                "final_answer": None,
+            }
 
-            logger.info("Gelen soru (stream): %r", req.question)
+            collected_trace = []
+            final_answer = ""
 
-            trace: list[dict] = []
-            response = chat.send_message(req.question)
+            async for event in supervisor_graph.astream_events(
+                initial_state,
+                version="v2",
+            ):
+                kind = event["event"]
+                name = event.get("name", "")
 
-            for step in range(MAX_AGENT_STEPS):
-                function_calls = [
-                    part.function_call
-                    for part in response.candidates[0].content.parts
-                    if part.function_call
-                ]
+                if kind == "on_chain_start":
+                    if name == "classify_intent":
+                        yield emit({"type": "thinking", "message": "Soru analiz ediliyor..."})
+                    elif name == "run_agent":
+                        state = event.get("data", {}).get("input", {})
+                        tool = state.get("selected_tool", "")
+                        tool_labels = {
+                            "query_youtube_rag": "YouTube RAG",
+                            "query_sql_agent": "SQL Agent",
+                            "query_browser_agent": "Browser Agent",
+                        }
+                        yield emit({
+                            "type": "thinking",
+                            "message": f"{tool_labels.get(tool, tool)} çağrılıyor...",
+                        })
+                    elif name == "grade_response":
+                        yield emit({"type": "thinking", "message": "Cevap kalitesi değerlendiriliyor..."})
+                    elif name == "synthesize":
+                        yield emit({"type": "thinking", "message": "Yanıt yazılıyor..."})
 
-                if not function_calls:
-                    final_text = response.text
-                    logger.info("Adım %d: Nihai cevap gönderiliyor.", step + 1)
-                    yield emit({"type": "thinking", "message": "Yanıt yazılıyor..."})
-                    yield emit({"type": "answer", "content": final_text})
-                    yield emit({"type": "done", "trace": trace})
-                    return
+                elif kind == "on_chain_end":
+                    if name == "classify_intent":
+                        output = event.get("data", {}).get("output", {})
+                        tool = output.get("selected_tool", "")
+                        args = output.get("tool_args", {})
+                        if tool != "unknown":
+                            yield emit({"type": "tool_call", "step": 1, "tool": tool, "args": args})
 
-                logger.info(
-                    "Adım %d: Gemini %d tool çağırıyor -> %s",
-                    step + 1,
-                    len(function_calls),
-                    [c.name for c in function_calls],
-                )
+                    elif name == "run_agent":
+                        output = event.get("data", {}).get("output", {})
+                        response = output.get("agent_response", "")
+                        trace = output.get("trace", [])
+                        collected_trace.extend(trace)
+                        tool = trace[-1]["tool"] if trace else ""
+                        yield emit({
+                            "type": "tool_result",
+                            "step": len(collected_trace),
+                            "tool": tool,
+                            "preview": response[:300] if response else "",
+                        })
 
-                function_response_parts = []
-                for call in function_calls:
-                    tool_name = call.name
-                    tool_args = dict(call.args)
+                    elif name == "grade_response":
+                        output = event.get("data", {}).get("output", {})
+                        if not output.get("is_sufficient", True):
+                            yield emit({"type": "thinking", "message": "Cevap yetersiz, tekrar deneniyor..."})
 
-                    logger.info("  -> Tool: %-25s | Args: %s", tool_name, tool_args)
-                    yield emit(
-                        {"type": "tool_call", "step": step + 1, "tool": tool_name, "args": tool_args}
-                    )
+                    elif name in ("synthesize", "handle_unknown"):
+                        output = event.get("data", {}).get("output", {})
+                        final_answer = output.get("final_answer", "")
+                        if final_answer:
+                            yield emit({"type": "answer", "content": final_answer})
 
-                    handler = TOOL_DISPATCH.get(tool_name)
-                    if handler is None:
-                        result = f"[bilinmeyen tool: {tool_name}]"
-                    else:
-                        result = await handler(**tool_args)
-
-                    logger.info("  <- Tool: %-25s | Sonuç (ilk 120 kar): %.120s", tool_name, result)
-                    yield emit(
-                        {"type": "tool_result", "step": step + 1, "tool": tool_name, "preview": result[:300]}
-                    )
-
-                    trace.append({"tool": tool_name, "args": tool_args, "result": result})
-
-                    function_response_parts.append(
-                        genai.protos.Part(
-                            function_response=genai.protos.FunctionResponse(
-                                name=tool_name,
-                                response={"result": result},
-                            )
-                        )
-                    )
-
-                yield emit({"type": "thinking", "message": f"Tüm sonuçlar toplandı, Gemini yanıtı sentezliyor..."})
-                response = chat.send_message(
-                    genai.protos.Content(parts=function_response_parts)
-                )
-
-            fallback_text = getattr(response, "text", None) or "Adım sınırına ulaşıldı, işlem tamamlanamadı."
-            yield emit({"type": "answer", "content": fallback_text})
-            yield emit({"type": "done", "trace": trace})
+            yield emit({"type": "done", "trace": collected_trace})
 
         except Exception as exc:
             logger.error("Stream hatası: %s", exc, exc_info=True)
