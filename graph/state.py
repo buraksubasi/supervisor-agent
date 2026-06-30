@@ -18,6 +18,10 @@ class SupervisorState(TypedDict):
     
     is_sufficient: bool | None
     attempts: int
-    
+
+    # Token sayımı — tüm node'lar birikimli olarak artırır
+    input_tokens: int
+    output_tokens: int
+
     trace: list[dict]
     final_answer: str | None

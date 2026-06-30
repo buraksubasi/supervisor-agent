@@ -401,22 +401,7 @@ export default function Home() {
   };
 
   return (
-    <div className="flex flex-col h-screen bg-surface">
-      {/* Header */}
-      <header className="flex items-center gap-3 px-6 py-4 border-b border-surface-border bg-surface-secondary">
-        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
-          <span className="text-white text-sm font-bold">S</span>
-        </div>
-        <div>
-          <h1 className="text-white font-semibold text-sm">Supervisor Agent</h1>
-          <p className="text-slate-400 text-xs">YouTube RAG · SQL Agent · Browser Agent</p>
-        </div>
-        <div className="ml-auto flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="text-xs text-slate-400">localhost:8000</span>
-        </div>
-      </header>
-
+    <div className="flex flex-col h-full bg-surface">
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
         {messages.length === 0 && (

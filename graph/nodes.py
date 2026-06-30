@@ -49,41 +49,54 @@ Eğer hiçbir tool uymuyorsa:
   "tools": [{{"tool": "unknown", "args": {{}}, "reason": "..."}}]
 }}"""
 
+def _token_delta(response) -> tuple[int, int]:
+    """Gemini response'undan (input, output) token sayısını çıkar."""
+    meta = getattr(response, "usage_metadata", None)
+    if meta is None:
+        return 0, 0
+    return (
+        getattr(meta, "prompt_token_count", 0) or 0,
+        getattr(meta, "candidates_token_count", 0) or 0,
+    )
+
+
 def classify_intent(state: SupervisorState) -> SupervisorState:
     model = genai.GenerativeModel(GEMINI_MODEL)
     response = model.generate_content(
         f"{CLASSIFY_PROMPT}\n\nKullanıcı sorusu: {state['question']}"
     )
-    
+    inp, out = _token_delta(response)
+
     try:
         clean = response.text.strip().replace("```json", "").replace("```", "").strip()
         data = json.loads(clean)
         planned = data.get("tools", [])
-        
+
         valid_tools = ["query_youtube_rag", "query_sql_agent", "query_browser_agent"]
         planned = [
             t for t in planned
             if t.get("tool") in valid_tools + ["unknown"]
         ]
-        
+
         if not planned:
             planned = [{"tool": "unknown", "args": {}, "reason": "Tanımlanamayan intent"}]
-        
-        # İlk tool'u active olarak set et
+
         first = planned[0]
         logger.info("[classify_intent] %d tool planlandı: %s", len(planned),
-                   [t["tool"] for t in planned])
-        
+                    [t["tool"] for t in planned])
+
     except json.JSONDecodeError:
         logger.error("[classify_intent] JSON parse hatası: %s", response.text)
         planned = [{"tool": "unknown", "args": {}, "reason": "Parse hatası"}]
         first = planned[0]
-    
+
     return {
         "planned_tools": planned,
         "current_tool_index": 0,
         "selected_tool": first["tool"],
         "tool_args": first.get("args", {}),
+        "input_tokens": state.get("input_tokens", 0) + inp,
+        "output_tokens": state.get("output_tokens", 0) + out,
     }
 
 
@@ -131,7 +144,6 @@ SADECE şu JSON formatında cevap ver:
 }}"""
 
 def grade_response(state: SupervisorState) -> SupervisorState:
-    # Max deneme aşıldıysa direkt yeterli say
     if state["attempts"] >= 2:
         logger.info("[grade_response] Max deneme aşıldı, kabul ediliyor.")
         return {"is_sufficient": True, "attempts": state["attempts"] + 1}
@@ -153,6 +165,8 @@ def grade_response(state: SupervisorState) -> SupervisorState:
     )
     response = model.generate_content(prompt)
     
+    inp, out = _token_delta(response)
+
     try:
         clean = response.text.strip().replace("```json", "").replace("```", "").strip()
         data = json.loads(clean)
@@ -160,11 +174,13 @@ def grade_response(state: SupervisorState) -> SupervisorState:
         reason = data.get("reason", "")
         logger.info("[grade_response] Yeterli: %s | %s", is_sufficient, reason)
     except json.JSONDecodeError:
-        is_sufficient = True  # parse hatası → kabul et
-    
+        is_sufficient = True
+
     return {
         "is_sufficient": is_sufficient,
-        "attempts": state["attempts"] + 1,  # her değerlendirmede artır
+        "attempts": state["attempts"] + 1,
+        "input_tokens": state.get("input_tokens", 0) + inp,
+        "output_tokens": state.get("output_tokens", 0) + out,
     }
 
 
@@ -195,7 +211,12 @@ Soru: {state['question']}
 Yanıt:"""
     
     response = model.generate_content(prompt)
-    return {"final_answer": response.text}
+    inp, out = _token_delta(response)
+    return {
+        "final_answer": response.text,
+        "input_tokens": state.get("input_tokens", 0) + inp,
+        "output_tokens": state.get("output_tokens", 0) + out,
+    }
 
 
 # ── 5. handle_unknown ────────────────────────────────────────────────────────
